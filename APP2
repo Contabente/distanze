@@ -1,0 +1,206 @@
+import csv
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox
+import requests
+import pandas as pd
+from itertools import permutations
+
+class AppPercorsoOttimale:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Calcolo Percorso Ottimale")
+        self.root.geometry("800x600")
+        
+        # Variabili per memorizzare i dati
+        self.dati_csv = None
+        self.giorni_disponibili = []
+        self.api_key = "YOUR_API_KEY"  # Inserisci qui la tua API key per le mappe
+        
+        # Frame principale
+        main_frame = ttk.Frame(root, padding="10")
+        main_frame.pack(fill="both", expand=True)
+        
+        # Titolo
+        ttk.Label(main_frame, text="Calcolo del Percorso Ottimale", font=("Arial", 16)).pack(pady=10)
+        
+        # Frame per la selezione del file e del giorno
+        select_frame = ttk.LabelFrame(main_frame, text="Selezione dati", padding="10")
+        select_frame.pack(fill="x", padx=10, pady=10)
+        
+        # Caricamento dati
+        ttk.Button(select_frame, text="Carica Dati CSV", command=self.carica_dati).grid(row=0, column=0, padx=5, pady=5)
+        
+        # Selezione del giorno
+        ttk.Label(select_frame, text="Seleziona Giorno:").grid(row=0, column=1, padx=5, pady=5)
+        self.combo_giorni = ttk.Combobox(select_frame, state="readonly")
+        self.combo_giorni.grid(row=0, column=2, padx=5, pady=5)
+        
+        # Pulsante per calcolare il percorso
+        ttk.Button(select_frame, text="Calcola Percorso", command=self.calcola_percorso).grid(row=0, column=3, padx=5, pady=5)
+        
+        # Frame per i risultati
+        result_frame = ttk.LabelFrame(main_frame, text="Risultati", padding="10")
+        result_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Area di testo per i risultati
+        self.result_text = tk.Text(result_frame, wrap="word", height=15)
+        self.result_text.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Scrollbar per l'area di testo
+        scrollbar = ttk.Scrollbar(self.result_text, orient="vertical", command=self.result_text.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.result_text.configure(yscrollcommand=scrollbar.set)
+        
+        # Frame per la mappa (placeholder)
+        map_frame = ttk.LabelFrame(main_frame, text="Mappa", padding="10")
+        map_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        ttk.Label(map_frame, text="La visualizzazione della mappa richiede l'integrazione con API come Google Maps").pack(pady=20)
+        
+        # Caricamento automatico del file CSV fornito
+        self.carica_csv_fornito()
+    
+    def carica_csv_fornito(self):
+        """Carica il file CSV fornito"""
+        try:
+            # Carica il file CSV fornito
+            self.dati_csv = pd.read_csv("PROVA2.csv", sep=";")
+            self.aggiorna_giorni_disponibili()
+            self.result_text.insert("1.0", "File CSV caricato con successo.\n")
+            self.result_text.insert("end", f"Righe totali: {len(self.dati_csv)}\n")
+            self.mostra_dati_csv()
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile caricare il file CSV: {str(e)}")
+    
+    def carica_dati(self):
+        """Ricarica i dati dal file CSV"""
+        try:
+            # In un'app reale qui useresti un file dialog
+            # Per ora, ricarichiamo semplicemente i dati dal file esistente
+            self.dati_csv = pd.read_csv("PROVA2.csv", sep=";")
+            self.aggiorna_giorni_disponibili()
+            self.result_text.delete("1.0", "end")
+            self.result_text.insert("1.0", "File CSV caricato con successo.\n")
+            self.result_text.insert("end", f"Righe totali: {len(self.dati_csv)}\n")
+            self.mostra_dati_csv()
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile caricare il file CSV: {str(e)}")
+    
+    def aggiorna_giorni_disponibili(self):
+        """Aggiorna l'elenco dei giorni disponibili nel combobox"""
+        if self.dati_csv is not None:
+            # Estrai i giorni unici
+            self.giorni_disponibili = self.dati_csv['GIORNO'].unique().tolist()
+            self.combo_giorni['values'] = self.giorni_disponibili
+            if self.giorni_disponibili:
+                self.combo_giorni.current(0)  # Seleziona il primo giorno
+    
+    def mostra_dati_csv(self):
+        """Mostra i dati del CSV nella casella di testo dei risultati"""
+        if self.dati_csv is not None:
+            self.result_text.insert("end", "\nDati disponibili nel CSV:\n")
+            self.result_text.insert("end", "-" * 60 + "\n")
+            self.result_text.insert("end", self.dati_csv.to_string(index=False) + "\n")
+            self.result_text.insert("end", "-" * 60 + "\n")
+    
+    def ottieni_distanza(self, origine, destinazione):
+        """
+        Calcola la distanza tra due indirizzi usando un'API di mappe.
+        In un'applicazione reale, dovresti utilizzare un'API come Google Maps o OpenStreetMap.
+        
+        Per questa demo, restituiamo una distanza fittizia.
+        """
+        # Simulazione di una risposta
+        if not origine or not destinazione or pd.isna(origine) or pd.isna(destinazione):
+            return float('inf')  # Distanza infinita per indirizzi invalidi
+        
+        # In un'app reale, qui faresti una chiamata API
+        # Esempio con Google Maps Distance Matrix API:
+        # url = f"https://maps.googleapis.com/maps/api/distancematrix/json?origins={origine}&destinations={destinazione}&key={self.api_key}"
+        # response = requests.get(url)
+        # data = response.json()
+        # distance = data['rows'][0]['elements'][0]['distance']['value']
+        
+        # Per demo, restituiamo una distanza fittizia basata sulla lunghezza degli indirizzi
+        distance = (len(origine) + len(destinazione)) * 100
+        return distance
+    
+    def calcola_percorso(self):
+        """Calcola il percorso ottimale per il giorno selezionato"""
+        if self.dati_csv is None:
+            messagebox.showwarning("Attenzione", "Devi prima caricare i dati CSV")
+            return
+        
+        giorno_selezionato = self.combo_giorni.get()
+        if not giorno_selezionato:
+            messagebox.showwarning("Attenzione", "Seleziona un giorno")
+            return
+        
+        self.result_text.delete("1.0", "end")
+        self.result_text.insert("1.0", f"Calcolo percorso per il giorno: {giorno_selezionato}\n\n")
+        
+        # Filtra i dati per il giorno selezionato
+        dati_giorno = self.dati_csv[self.dati_csv['GIORNO'] == giorno_selezionato]
+        
+        # Verifica se ci sono indirizzi validi
+        dati_giorno = dati_giorno.dropna(subset=['CASA', 'LAVORO'])
+        
+        if dati_giorno.empty:
+            self.result_text.insert("end", "Nessun indirizzo valido trovato per questo giorno.\n")
+            return
+        
+        self.result_text.insert("end", f"Trovati {len(dati_giorno)} indirizzi per il giorno {giorno_selezionato}.\n\n")
+        
+        # Ottieni indirizzi unici di casa e lavoro
+        indirizzi_casa = dati_giorno['CASA'].unique().tolist()
+        indirizzi_casa = [indirizzo for indirizzo in indirizzi_casa if isinstance(indirizzo, str) and indirizzo.strip()]
+        
+        indirizzi_lavoro = dati_giorno['LAVORO'].unique().tolist()
+        indirizzi_lavoro = [indirizzo for indirizzo in indirizzi_lavoro if isinstance(indirizzo, str) and indirizzo.strip()]
+        
+        if not indirizzi_casa:
+            self.result_text.insert("end", "Nessun indirizzo CASA valido trovato.\n")
+            return
+            
+        if not indirizzi_lavoro:
+            self.result_text.insert("end", "Nessun indirizzo LAVORO valido trovato.\n")
+            return
+        
+        # Visualizza gli indirizzi trovati
+        self.result_text.insert("end", "Indirizzi CASA:\n")
+        for idx, indirizzo in enumerate(indirizzi_casa):
+            self.result_text.insert("end", f"{idx+1}. {indirizzo}\n")
+        
+        self.result_text.insert("end", "\nIndirizzi LAVORO:\n")
+        for idx, indirizzo in enumerate(indirizzi_lavoro):
+            self.result_text.insert("end", f"{idx+1}. {indirizzo}\n")
+        
+        # Se c'è un solo indirizzo casa e un solo indirizzo lavoro
+        if len(indirizzi_casa) == 1 and len(indirizzi_lavoro) == 1:
+            casa = indirizzi_casa[0]
+            lavoro = indirizzi_lavoro[0]
+            
+            distanza_casa_lavoro = self.ottieni_distanza(casa, lavoro)
+            distanza_lavoro_casa = self.ottieni_distanza(lavoro, casa)
+            
+            distanza_totale = distanza_casa_lavoro + distanza_lavoro_casa
+            
+            self.result_text.insert("end", "\nRisultato percorso ottimale:\n")
+            self.result_text.insert("end", f"1. Partenza da CASA: {casa}\n")
+            self.result_text.insert("end", f"2. Arrivo a LAVORO: {lavoro}\n")
+            self.result_text.insert("end", f"3. Ritorno a CASA: {casa}\n")
+            self.result_text.insert("end", f"\nDistanza totale stimata: {distanza_totale/1000:.2f} km\n")
+        else:
+            # Se ci sono più indirizzi, calcola il percorso ottimale
+            self.result_text.insert("end", "\nCalcolo del percorso ottimale con più indirizzi...\n")
+            self.result_text.insert("end", "Questa funzionalità richiederebbe un algoritmo TSP (Traveling Salesman Problem)\n")
+            self.result_text.insert("end", "e l'integrazione con un'API di mappe reale per calcolare le distanze accurate.\n")
+
+def main():
+    root = tk.Tk()
+    app = AppPercorsoOttimale(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
