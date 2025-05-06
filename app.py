@@ -15,8 +15,8 @@ if uploaded_file is not None:
     except Exception:
         df = pd.read_csv(uploaded_file)
 
-    if 'CASA' not in df.columns or 'LAVORO' not in df.columns:
-        st.error("Il file CSV deve contenere le colonne 'CASA' e 'LAVORO'.")
+    if 'CASA' not in df.columns or 'LAVORO' not in df.columns or 'GIORNO' not in df.columns:
+        st.error("Il file CSV deve contenere le colonne 'CASA', 'LAVORO' e 'GIORNO'.")
     else:
         df['CASA'] = df['CASA'].fillna(method='ffill')
 
@@ -44,22 +44,29 @@ if uploaded_file is not None:
         casa_coords = geocode_addresses(df['CASA'].dropna().unique())
         lavoro_coords = geocode_addresses(df['LAVORO'].dropna().unique())
 
-        def calculate_distance(row):
-            casa = casa_coords.get(row['CASA'])
-            lavoro = lavoro_coords.get(row['LAVORO'])
-            if casa and lavoro:
-                return round(geodesic(casa, lavoro).kilometers * 2, 2)
-            return None
+        def calculate_home_to_first_work_and_last_work_to_home(group):
+            casa = casa_coords.get(group['CASA'].iloc[0])
+            lavori = group['LAVORO'].tolist()
+            dist = 0
+            if casa and lavori:
+                primo_lavoro = lavoro_coords.get(lavori[0])
+                ultimo_lavoro = lavoro_coords.get(lavori[-1])
+                if casa and primo_lavoro:
+                    dist += geodesic(casa, primo_lavoro).kilometers
+                if ultimo_lavoro and casa:
+                    dist += geodesic(ultimo_lavoro, casa).kilometers
+            return dist
 
-        df['Distanza_km'] = df.apply(calculate_distance, axis=1)
+        distanza_per_giorno = df.groupby('GIORNO').apply(calculate_home_to_first_work_and_last_work_to_home).reset_index(name='Distanza_km')
+        distanza_per_giorno['Distanza_km'] = distanza_per_giorno['Distanza_km'].round(2)
 
         st.success("Distanze calcolate con successo!")
-        st.dataframe(df)
+        st.dataframe(distanza_per_giorno)
 
-        csv = df.to_csv(index=False).encode('utf-8')
+        csv = distanza_per_giorno.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="Scarica risultati in CSV",
             data=csv,
-            file_name='distanze_calcolate.csv',
+            file_name='distanze_per_giorno.csv',
             mime='text/csv'
         )
