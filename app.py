@@ -51,13 +51,16 @@ if uploaded_file is not None:
             dist = 0
             percorso = [casa]  # Inizia da casa
 
-            # Aggiunge le coordinate di ogni lavoro se valide
+            # Aggiunge le coordinate di ogni lavoro se valide, evitando duplicati consecutivi
+            last_coord = None
             for l in lavori:
                 coord = lavoro_coords.get(l)
-                if coord:
+                if coord and coord != last_coord:
                     percorso.append(coord)
+                    last_coord = coord
 
-            percorso.append(casa)  # Ritorno a casa
+            if last_coord != casa:
+                percorso.append(casa)  # Ritorno a casa solo se l'ultimo indirizzo è diverso
 
             # Calcola la distanza totale tra punti consecutivi nel percorso
             for i in range(len(percorso) - 1):
