@@ -1,272 +1,235 @@
-import csv
+import streamlit as st
 import requests
-import time
-from itertools import permutations
+import folium
+from folium.features import DivIcon
+import polyline
+from streamlit_folium import folium_static
+import pandas as pd
+from datetime import datetime
+import json
 
-# URL base per l'API OSRM gratuita
-OSRM_URL = "https://router.project-osrm.org/route/v1/driving/"
+# Titolo dell'app
+st.title("Pianificatore del Tragitto Casa-Lavoro")
 
+# Sidebar per l'inserimento degli indirizzi e la data
+with st.sidebar:
+    st.header("Impostazioni")
+    
+    # Inserimento degli indirizzi
+    casa_address = st.text_input("Indirizzo di Casa", value="Via Roma 1, Milano")
+    lavoro_address = st.text_input("Indirizzo di Lavoro", value="Via Dante 15, Milano")
+    
+    # Selezione della data
+    selected_date = st.date_input("Seleziona il giorno", datetime.now())
+    
+    # Pulsante per calcolare il percorso
+    calculate_button = st.button("Calcola Percorso", type="primary")
+
+# Funzione per convertire indirizzo in coordinate usando Nominatim (OpenStreetMap)
 def geocode_address(address):
-    """
-    Converte un indirizzo in coordinate geografiche (latitudine, longitudine)
-    usando l'API gratuita di OpenStreetMap Nominatim.
-    """
-    if not address or address.strip() == "":
-        return None
-        
     try:
-        # Rispettiamo le policy di uso della API Nominatim aggiungendo un user-agent
+        base_url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": address,
+            "format": "json",
+            "limit": 1,
+        }
         headers = {
-            'User-Agent': 'PythonRouteOptimizer/1.0'
+            "User-Agent": "TraggittoMinimoApp/1.0"  # È buona pratica fornire un User-Agent
         }
         
-        # Formatta l'indirizzo per l'URL
-        encoded_address = address.replace(' ', '+')
-        url = f"https://nominatim.openstreetmap.org/search?q={encoded_address}&format=json&limit=1"
+        response = requests.get(base_url, params=params, headers=headers)
+        data = response.json()
         
-        # Facciamo la richiesta
-        response = requests.get(url, headers=headers)
-        
-        # Aggiungiamo un ritardo per rispettare i limiti di utilizzo dell'API
-        time.sleep(1)
-        
-        # Processiamo la risposta
-        if response.status_code == 200:
-            data = response.json()
-            if data and len(data) > 0:
-                lat = float(data[0]['lat'])
-                lon = float(data[0]['lon'])
-                print(f"Indirizzo geocodificato: {address} -> ({lat}, {lon})")
-                return (lat, lon)
-        
-        # Se arriviamo qui, c'è stato un problema con la geocodifica
-        print(f"Impossibile geocodificare l'indirizzo: {address}")
-        return None
-        
+        if data and len(data) > 0:
+            lat = float(data[0]["lat"])
+            lon = float(data[0]["lon"])
+            display_name = data[0]["display_name"]
+            return lat, lon, display_name
+        else:
+            st.error(f"Impossibile trovare l'indirizzo: {address}")
+            return None, None, None
     except Exception as e:
-        print(f"Errore durante la geocodifica: {str(e)}")
-        return None
+        st.error(f"Errore durante la geocodifica: {str(e)}")
+        return None, None, None
 
-def ottieni_distanza(origine, destinazione):
-    """
-    Calcola la distanza tra due indirizzi usando l'API gratuita OSRM
-    """
-    if not origine or not destinazione:
-        return float('inf')  # Distanza infinita per indirizzi invalidi
-    
+# Funzione per calcolare il percorso usando OSRM
+def get_route(start_coords, end_coords):
     try:
-        # Geocodifica gli indirizzi
-        print(f"\nCalcolo distanza da {origine} a {destinazione}...")
-        origine_coords = geocode_address(origine)
-        destinazione_coords = geocode_address(destinazione)
-        
-        if not origine_coords or not destinazione_coords:
-            print("Impossibile ottenere le coordinate per uno degli indirizzi.")
-            return float('inf')
-        
-        # Formato richiesto da OSRM: {lon},{lat}
-        origine_str = f"{origine_coords[1]},{origine_coords[0]}"
-        destinazione_str = f"{destinazione_coords[1]},{destinazione_coords[0]}"
-        
-        # Costruisci l'URL per la richiesta all'API OSRM
-        url = f"{OSRM_URL}{origine_str};{destinazione_str}?overview=false"
-        
-        # Effettua la richiesta
+        url = f"http://router.project-osrm.org/route/v1/driving/{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}?overview=full&geometries=polyline"
         response = requests.get(url)
+        data = response.json()
         
-        # Aggiungiamo un piccolo ritardo per rispettare i limiti di utilizzo dell'API
-        time.sleep(0.5)
+        if data["code"] != "Ok":
+            st.error("Errore nel calcolo del percorso")
+            return None, None
         
-        # Verifica ed elabora la risposta
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Controlla che ci sia un percorso valido
-            if data['code'] == 'Ok' and len(data['routes']) > 0:
-                # La distanza è in metri
-                distance = data['routes'][0]['distance']
-                print(f"Distanza da {origine} a {destinazione}: {distance/1000:.2f} km")
-                return distance
+        route = data["routes"][0]
+        geometry = route["geometry"]
+        duration = route["duration"] / 60  # Convertito in minuti
+        distance = route["distance"] / 1000  # Convertito in km
         
-        # Se arriviamo qui, c'è stato un problema nel calcolo del percorso
-        print(f"Impossibile calcolare il percorso tra {origine} e {destinazione}")
-        return float('inf')
+        # Decodifica la geometria polyline
+        decoded_polyline = polyline.decode(geometry)
         
+        return decoded_polyline, {"duration": duration, "distance": distance}
     except Exception as e:
-        print(f"Errore durante il calcolo della distanza: {str(e)}")
-        return float('inf')
-
-def carica_csv(file_path, separator=';'):
-    """Carica i dati dal file CSV"""
-    try:
-        print(f"Caricamento del file CSV: {file_path}")
-        
-        dati = []
-        with open(file_path, 'r', encoding='utf-8') as f:
-            reader = csv.reader(f, delimiter=separator)
-            headers = next(reader)  # Leggi l'intestazione
-            
-            for row in reader:
-                if len(row) >= 3:  # Verifichiamo che ci siano almeno 3 colonne
-                    dati.append({
-                        'CASA': row[0].strip() if row[0].strip() else None,
-                        'LAVORO': row[1].strip() if row[1].strip() else None,
-                        'GIORNO': row[2].strip() if row[2].strip() else None
-                    })
-        
-        print(f"File caricato con successo. Righe totali: {len(dati)}")
-        return dati, headers
-    except Exception as e:
-        print(f"Errore nel caricamento del file CSV: {str(e)}")
+        st.error(f"Errore durante il calcolo del percorso: {str(e)}")
         return None, None
 
-def main():
-    # Percorso del file CSV
-    file_path = "PROVA2.csv"
+# Funzione per visualizzare il percorso sulla mappa
+def display_route(casa_coords, lavoro_coords, route_casa_lavoro, route_lavoro_casa, casa_name, lavoro_name, metrics_casa_lavoro, metrics_lavoro_casa):
+    # Creare una mappa centrata tra i due punti
+    center_lat = (casa_coords[0] + lavoro_coords[0]) / 2
+    center_lon = (casa_coords[1] + lavoro_coords[1]) / 2
+    my_map = folium.Map(location=[center_lat, center_lon], zoom_start=12)
     
-    # Carica i dati
-    dati, headers = carica_csv(file_path)
-    if dati is None:
-        return
+    # Aggiungere marker per casa e lavoro
+    folium.Marker(
+        location=[casa_coords[0], casa_coords[1]],
+        popup=casa_name,
+        tooltip="Casa",
+        icon=folium.Icon(icon="home", prefix="fa", color="green")
+    ).add_to(my_map)
     
-    # Chiedi all'utente di selezionare un giorno
-    print("\nGiorni disponibili:")
-    giorni = set()
-    for row in dati:
-        if row['GIORNO']:
-            giorni.add(row['GIORNO'])
+    folium.Marker(
+        location=[lavoro_coords[0], lavoro_coords[1]],
+        popup=lavoro_name,
+        tooltip="Lavoro",
+        icon=folium.Icon(icon="briefcase", prefix="fa", color="blue")
+    ).add_to(my_map)
     
-    giorni_list = sorted(list(giorni))
-    for i, giorno in enumerate(giorni_list):
-        print(f"{i+1}. {giorno}")
+    # Aggiungere il percorso Casa -> Lavoro
+    folium.PolyLine(
+        route_casa_lavoro,
+        color="blue",
+        weight=4,
+        opacity=0.8,
+        tooltip="Casa -> Lavoro"
+    ).add_to(my_map)
     
-    # Seleziona il giorno
-    while True:
-        try:
-            scelta = int(input("\nSeleziona un giorno (numero): "))
-            if 1 <= scelta <= len(giorni_list):
-                giorno_selezionato = giorni_list[scelta-1]
-                break
-            print("Scelta non valida. Riprova.")
-        except ValueError:
-            print("Inserisci un numero valido.")
+    # Aggiungere il percorso Lavoro -> Casa
+    folium.PolyLine(
+        route_lavoro_casa,
+        color="green",
+        weight=4,
+        opacity=0.8,
+        tooltip="Lavoro -> Casa"
+    ).add_to(my_map)
     
-    print(f"\nCalcolo percorso per il giorno: {giorno_selezionato}")
+    # Aggiungi etichette alle linee
+    midpoint_casa_lavoro = route_casa_lavoro[len(route_casa_lavoro) // 2]
+    folium.map.Marker(
+        location=midpoint_casa_lavoro,
+        icon=DivIcon(
+            icon_size=(150, 36),
+            icon_anchor=(75, 18),
+            html=f'<div style="font-size: 12pt; color: blue; text-align: center;">Casa → Lavoro</div>'
+        )
+    ).add_to(my_map)
     
-    # Filtra i dati per il giorno selezionato
-    dati_giorno = [row for row in dati if row['GIORNO'] == giorno_selezionato]
+    midpoint_lavoro_casa = route_lavoro_casa[len(route_lavoro_casa) // 2]
+    folium.map.Marker(
+        location=midpoint_lavoro_casa,
+        icon=DivIcon(
+            icon_size=(150, 36),
+            icon_anchor=(75, 18),
+            html=f'<div style="font-size: 12pt; color: green; text-align: center;">Lavoro → Casa</div>'
+        )
+    ).add_to(my_map)
     
-    # Verifica se ci sono indirizzi validi
-    dati_validi = [row for row in dati_giorno if row['CASA'] and row['LAVORO']]
-    
-    if not dati_validi:
-        print("Nessun indirizzo valido trovato per questo giorno.")
-        return
-    
-    print(f"Trovati {len(dati_validi)} indirizzi per il giorno {giorno_selezionato}.")
-    
-    # Ottieni indirizzi unici di casa e lavoro
-    indirizzi_casa = list({row['CASA'] for row in dati_validi if row['CASA']})
-    indirizzi_lavoro = list({row['LAVORO'] for row in dati_validi if row['LAVORO']})
-    
-    # Visualizza gli indirizzi trovati
-    print("\nIndirizzi CASA:")
-    for idx, indirizzo in enumerate(indirizzi_casa):
-        print(f"{idx+1}. {indirizzo}")
-    
-    print("\nIndirizzi LAVORO:")
-    for idx, indirizzo in enumerate(indirizzi_lavoro):
-        print(f"{idx+1}. {indirizzo}")
-    
-    # Se c'è un solo indirizzo casa e un solo indirizzo lavoro
-    if len(indirizzi_casa) == 1 and len(indirizzi_lavoro) == 1:
-        casa = indirizzi_casa[0]
-        lavoro = indirizzi_lavoro[0]
-        
-        print("\nCalcolo distanze tra gli indirizzi...")
-        
-        distanza_casa_lavoro = ottieni_distanza(casa, lavoro)
-        distanza_lavoro_casa = ottieni_distanza(lavoro, casa)
-        
-        if distanza_casa_lavoro == float('inf') or distanza_lavoro_casa == float('inf'):
-            print("\nImpossibile calcolare il percorso completo a causa di errori nella geocodifica o nel routing.")
-            return
-        
-        distanza_totale = distanza_casa_lavoro + distanza_lavoro_casa
-        
-        print("\nRisultato percorso ottimale:")
-        print(f"1. Partenza da CASA: {casa}")
-        print(f"2. Arrivo a LAVORO: {lavoro}")
-        print(f"3. Ritorno a CASA: {casa}")
-        print(f"\nDistanza totale: {distanza_totale/1000:.2f} km")
-    else:
-        # Se ci sono più indirizzi, calcola il percorso ottimale
-        print("\nCalcolo del percorso ottimale con più indirizzi...")
-        
-        # Creiamo una lista di tutti gli indirizzi
-        indirizzi_lavoro_unici = list(set(indirizzi_lavoro))
-        casa_base = indirizzi_casa[0]  # Usiamo il primo indirizzo casa come base
-        
-        print(f"Indirizzo CASA base: {casa_base}")
-        print("Calcolo delle distanze tra tutti gli indirizzi...")
-        
-        # Matrice delle distanze
-        distanze = {}
-        
-        # Calcola distanza da casa a ogni lavoro
-        for lavoro in indirizzi_lavoro_unici:
-            distanze[(casa_base, lavoro)] = ottieni_distanza(casa_base, lavoro)
-            
-        # Calcola distanza tra ogni coppia di lavori
-        for i, lavoro1 in enumerate(indirizzi_lavoro_unici):
-            for lavoro2 in indirizzi_lavoro_unici[i+1:]:
-                dist = ottieni_distanza(lavoro1, lavoro2)
-                distanze[(lavoro1, lavoro2)] = dist
-                distanze[(lavoro2, lavoro1)] = dist
-                
-        # Calcola distanza da ogni lavoro a casa
-        for lavoro in indirizzi_lavoro_unici:
-            distanze[(lavoro, casa_base)] = ottieni_distanza(lavoro, casa_base)
-        
-        # Trova il percorso ottimale usando una semplice implementazione del TSP
-        if len(indirizzi_lavoro_unici) <= 6:  # Limita il calcolo del permutazioni per evitare problemi di performance
-            print("Calcolo di tutte le possibili combinazioni di percorso...")
-            
-            # Genera tutte le possibili permutazioni degli indirizzi lavoro
-            best_route = None
-            min_distance = float('inf')
-            
-            for perm in permutations(indirizzi_lavoro_unici):
-                # Calcola la distanza totale per questo percorso
-                route_distance = distanze[(casa_base, perm[0])]  # Da casa al primo lavoro
-                
-                # Tra i lavori
-                for i in range(len(perm) - 1):
-                    route_distance += distanze[(perm[i], perm[i+1])]
-                
-                # Dall'ultimo lavoro a casa
-                route_distance += distanze[(perm[-1], casa_base)]
-                
-                # Aggiorna il miglior percorso se questo è migliore
-                if route_distance < min_distance:
-                    min_distance = route_distance
-                    best_route = perm
-            
-            # Mostra il percorso ottimale
-            if best_route:
-                print("\nPercorso ottimale trovato:")
-                print(f"1. Partenza da CASA: {casa_base}")
-                
-                for i, lavoro in enumerate(best_route):
-                    print(f"{i+2}. Visita a LAVORO: {lavoro}")
-                
-                print(f"{len(best_route)+2}. Ritorno a CASA: {casa_base}")
-                print(f"\nDistanza totale: {min_distance/1000:.2f} km")
-            else:
-                print("Impossibile trovare un percorso valido.")
-        else:
-            print("Troppe località da visitare per calcolare tutte le permutazioni.")
-            print("Per ottimizzare percorsi con molte destinazioni, si consiglia di implementare algoritmi più efficienti come nearest neighbor o branch-and-bound.")
+    return my_map
 
-if __name__ == "__main__":
-    main()
+# Esegui il calcolo quando si preme il pulsante
+if calculate_button:
+    # Geocodifica degli indirizzi
+    casa_lat, casa_lon, casa_display = geocode_address(casa_address)
+    lavoro_lat, lavoro_lon, lavoro_display = geocode_address(lavoro_address)
+    
+    if casa_lat and lavoro_lat:
+        casa_coords = (casa_lat, casa_lon)
+        lavoro_coords = (lavoro_lat, lavoro_lon)
+        
+        # Calcola percorsi
+        route_casa_lavoro, metrics_casa_lavoro = get_route(casa_coords, lavoro_coords)
+        route_lavoro_casa, metrics_lavoro_casa = get_route(lavoro_coords, casa_coords)
+        
+        if route_casa_lavoro and route_lavoro_casa:
+            # Mostra informazioni sul percorso
+            st.header(f"Percorso per {selected_date.strftime('%d/%m/%Y')}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Casa → Lavoro")
+                st.write(f"Distanza: {metrics_casa_lavoro['distance']:.2f} km")
+                st.write(f"Durata: {metrics_casa_lavoro['duration']:.1f} minuti")
+            
+            with col2:
+                st.subheader("Lavoro → Casa")
+                st.write(f"Distanza: {metrics_lavoro_casa['distance']:.2f} km")
+                st.write(f"Durata: {metrics_lavoro_casa['duration']:.1f} minuti")
+            
+            st.subheader("Percorso completo")
+            st.write(f"Distanza totale: {metrics_casa_lavoro['distance'] + metrics_lavoro_casa['distance']:.2f} km")
+            st.write(f"Durata totale: {metrics_casa_lavoro['duration'] + metrics_lavoro_casa['duration']:.1f} minuti")
+            
+            # Visualizza sulla mappa
+            my_map = display_route(
+                casa_coords, lavoro_coords, 
+                route_casa_lavoro, route_lavoro_casa,
+                casa_display, lavoro_display,
+                metrics_casa_lavoro, metrics_lavoro_casa
+            )
+            
+            st.subheader("Mappa del percorso")
+            folium_static(my_map)
+            
+            # Tabella riassuntiva
+            st.subheader("Riepilogo")
+            data = {
+                "Percorso": ["Casa → Lavoro", "Lavoro → Casa", "Totale"],
+                "Distanza (km)": [
+                    f"{metrics_casa_lavoro['distance']:.2f}",
+                    f"{metrics_lavoro_casa['distance']:.2f}",
+                    f"{metrics_casa_lavoro['distance'] + metrics_lavoro_casa['distance']:.2f}"
+                ],
+                "Durata (min)": [
+                    f"{metrics_casa_lavoro['duration']:.1f}",
+                    f"{metrics_lavoro_casa['duration']:.1f}",
+                    f"{metrics_casa_lavoro['duration'] + metrics_lavoro_casa['duration']:.1f}"
+                ]
+            }
+            df = pd.DataFrame(data)
+            st.table(df)
+            
+            # Salva le informazioni del tragitto (puoi implementare il salvataggio in un file se necessario)
+            saved_info = {
+                "data": selected_date.strftime('%Y-%m-%d'),
+                "casa": casa_address,
+                "lavoro": lavoro_address,
+                "distanza_totale": metrics_casa_lavoro['distance'] + metrics_lavoro_casa['distance'],
+                "durata_totale": metrics_casa_lavoro['duration'] + metrics_lavoro_casa['duration']
+            }
+            st.session_state.saved_info = saved_info
+        else:
+            st.error("Impossibile calcolare i percorsi")
+    else:
+        st.error("Verifica che gli indirizzi inseriti siano corretti")
+
+# Mostra informazioni sulla modalità d'uso
+if not calculate_button:
+    st.info("""
+    ### Come usare l'app:
+    1. Inserisci gli indirizzi di casa e lavoro nella barra laterale
+    2. Seleziona la data di interesse
+    3. Clicca su 'Calcola Percorso'
+    
+    L'app calcolerà il tragitto minimo Casa → Lavoro → Casa e mostrerà i dettagli sulla mappa.
+    """)
+    
+    # Esempio di immagine placeholder per la mappa (quando non ci sono ancora dati)
+    st.image("https://via.placeholder.com/800x400?text=Inserisci+gli+indirizzi+e+calcola+il+percorso", use_column_width=True)
+
+# Informazioni sul footer
+st.markdown("---")
+st.markdown("App creata per calcolare il tragitto minimo Casa-Lavoro utilizzando le API gratuite di OpenStreetMap")
