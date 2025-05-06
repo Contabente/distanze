@@ -3,6 +3,7 @@ import streamlit as st
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.distance import geodesic
+from itertools import permutations
 
 st.set_page_config(page_title="Calcolo Distanze Casa-Lavoro", layout="centered")
 st.title("Calcolo Distanze Casa → Lavoro → Casa")
@@ -44,32 +45,27 @@ if uploaded_file is not None:
         casa_coords = geocode_addresses(df['CASA'].dropna().unique())
         lavoro_coords = geocode_addresses(df['LAVORO'].dropna().unique())
 
-        def calculate_total_distance(group):
+        def calculate_shortest_route(group):
             casa_address = group['CASA'].iloc[0]
             casa = casa_coords.get(casa_address)
-            lavori = group['LAVORO'].tolist()
-            dist = 0
-            percorso = [casa]  # Inizia da casa
+            lavori_indirizzi = list(dict.fromkeys(group['LAVORO'].tolist()))  # Rimuove duplicati mantenendo l'ordine
 
-            # Aggiunge le coordinate di ogni lavoro se valide, evitando duplicati consecutivi
-            last_coord = None
-            for l in lavori:
-                coord = lavoro_coords.get(l)
-                if coord and coord != last_coord:
-                    percorso.append(coord)
-                    last_coord = coord
+            coords_lavoro = [lavoro_coords.get(l) for l in lavori_indirizzi if lavoro_coords.get(l) is not None]
 
-            if last_coord != casa:
-                percorso.append(casa)  # Ritorno a casa solo se l'ultimo indirizzo è diverso
+            if not casa or not coords_lavoro:
+                return 0
 
-            # Calcola la distanza totale tra punti consecutivi nel percorso
-            for i in range(len(percorso) - 1):
-                if percorso[i] and percorso[i + 1]:
-                    dist += geodesic(percorso[i], percorso[i + 1]).kilometers
+            min_dist = float('inf')
+            for perm in permutations(coords_lavoro):
+                dist = geodesic(casa, perm[0]).kilometers
+                for i in range(len(perm) - 1):
+                    dist += geodesic(perm[i], perm[i + 1]).kilometers
+                dist += geodesic(perm[-1], casa).kilometers
+                min_dist = min(min_dist, dist)
 
-            return dist
+            return min_dist
 
-        distanza_per_giorno = df.groupby('GIORNO').apply(calculate_total_distance).reset_index(name='Distanza_km')
+        distanza_per_giorno = df.groupby('GIORNO').apply(calculate_shortest_route).reset_index(name='Distanza_km')
         distanza_per_giorno['Distanza_km'] = distanza_per_giorno['Distanza_km'].round(2)
 
         st.success("Distanze calcolate con successo!")
@@ -82,3 +78,4 @@ if uploaded_file is not None:
             file_name='distanze_per_giorno.csv',
             mime='text/csv'
         )
+
