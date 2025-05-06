@@ -45,16 +45,25 @@ if uploaded_file is not None:
         lavoro_coords = geocode_addresses(df['LAVORO'].dropna().unique())
 
         def calculate_total_distance(group):
-            casa = casa_coords.get(group['CASA'].iloc[0])
+            casa_address = group['CASA'].iloc[0]
+            casa = casa_coords.get(casa_address)
             lavori = group['LAVORO'].tolist()
             dist = 0
-            if casa and lavori:
-                coords = [lavoro_coords.get(l) for l in lavori if lavoro_coords.get(l)]
-                if coords:
-                    dist += geodesic(casa, coords[0]).kilometers
-                    for i in range(len(coords) - 1):
-                        dist += geodesic(coords[i], coords[i + 1]).kilometers
-                    dist += geodesic(coords[-1], casa).kilometers
+            percorso = [casa]  # Inizia da casa
+
+            # Aggiunge le coordinate di ogni lavoro se valide
+            for l in lavori:
+                coord = lavoro_coords.get(l)
+                if coord:
+                    percorso.append(coord)
+
+            percorso.append(casa)  # Ritorno a casa
+
+            # Calcola la distanza totale tra punti consecutivi nel percorso
+            for i in range(len(percorso) - 1):
+                if percorso[i] and percorso[i + 1]:
+                    dist += geodesic(percorso[i], percorso[i + 1]).kilometers
+
             return dist
 
         distanza_per_giorno = df.groupby('GIORNO').apply(calculate_total_distance).reset_index(name='Distanza_km')
