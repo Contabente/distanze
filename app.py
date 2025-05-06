@@ -44,20 +44,20 @@ if uploaded_file is not None:
         casa_coords = geocode_addresses(df['CASA'].dropna().unique())
         lavoro_coords = geocode_addresses(df['LAVORO'].dropna().unique())
 
-        def calculate_home_to_first_work_and_last_work_to_home(group):
+        def calculate_total_distance(group):
             casa = casa_coords.get(group['CASA'].iloc[0])
             lavori = group['LAVORO'].tolist()
             dist = 0
             if casa and lavori:
-                primo_lavoro = lavoro_coords.get(lavori[0])
-                ultimo_lavoro = lavoro_coords.get(lavori[-1])
-                if casa and primo_lavoro:
-                    dist += geodesic(casa, primo_lavoro).kilometers
-                if ultimo_lavoro and casa:
-                    dist += geodesic(ultimo_lavoro, casa).kilometers
+                coords = [lavoro_coords.get(l) for l in lavori if lavoro_coords.get(l)]
+                if coords:
+                    dist += geodesic(casa, coords[0]).kilometers
+                    for i in range(len(coords) - 1):
+                        dist += geodesic(coords[i], coords[i + 1]).kilometers
+                    dist += geodesic(coords[-1], casa).kilometers
             return dist
 
-        distanza_per_giorno = df.groupby('GIORNO').apply(calculate_home_to_first_work_and_last_work_to_home).reset_index(name='Distanza_km')
+        distanza_per_giorno = df.groupby('GIORNO').apply(calculate_total_distance).reset_index(name='Distanza_km')
         distanza_per_giorno['Distanza_km'] = distanza_per_giorno['Distanza_km'].round(2)
 
         st.success("Distanze calcolate con successo!")
