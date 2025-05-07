@@ -133,6 +133,79 @@ def find_optimal_route(distances, start_index):
     
     return path
 
+# Funzione per calcolare e visualizzare la sommatoria dei km per tutti i giorni
+def calculate_total_km_for_all_days(df):
+    giorni_disponibili = df["GIORNO"].unique().tolist()
+    risultati_totali = []
+    distanza_totale_complessiva = 0
+    durata_totale_complessiva = 0
+
+    with st.spinner("Calcolo dei percorsi per tutti i giorni..."):
+        for giorno in giorni_disponibili:
+            # Filtra per il giorno corrente
+            filtered_df = df[df["GIORNO"] == giorno]
+            
+            if not filtered_df.empty:
+                # Ottieni tutti gli indirizzi unici per quel giorno
+                casa_address = filtered_df["CASA"].iloc[0]
+                lavoro_addresses = filtered_df["LAVORO"].unique().tolist()
+                
+                # Geocodifica tutti gli indirizzi
+                coords_casa = geocode_address(casa_address)
+                if coords_casa is None:
+                    st.error(f"Impossibile geocodificare l'indirizzo di casa per il giorno {giorno}: {casa_address}")
+                    continue
+                
+                coords_lavoro_list = []
+                geocode_failed = False
+                for addr in lavoro_addresses:
+                    coords = geocode_address(addr)
+                    if coords is None:
+                        st.error(f"Impossibile geocodificare l'indirizzo di lavoro per il giorno {giorno}: {addr}")
+                        geocode_failed = True
+                        break
+                    coords_lavoro_list.append(coords)
+                
+                if geocode_failed:
+                    continue
+                
+                # Crea lista completa di coordinate con casa come prima posizione
+                all_coords = [coords_casa] + coords_lavoro_list
+                
+                # Calcola la matrice delle distanze
+                distances, durations = calculate_distance_matrix(all_coords)
+                
+                if distances is None or durations is None:
+                    st.error(f"Impossibile calcolare la matrice delle distanze per il giorno {giorno}.")
+                    continue
+                
+                # Trova il percorso ottimale
+                optimal_route = find_optimal_route(distances, 0)
+                
+                # Calcola la distanza totale e la durata
+                total_distance = 0
+                total_duration = 0
+                
+                for i in range(len(optimal_route) - 1):
+                    from_idx = optimal_route[i]
+                    to_idx = optimal_route[i + 1]
+                    total_distance += distances[from_idx, to_idx]
+                    total_duration += durations[from_idx, to_idx]
+                
+                # Aggiungi ai totali complessivi
+                distanza_totale_complessiva += total_distance
+                durata_totale_complessiva += total_duration
+                
+                # Salva risultati per questo giorno
+                risultati_totali.append({
+                    "Giorno": giorno,
+                    "Numero Lavori": len(lavoro_addresses),
+                    "Distanza Totale (km)": round(total_distance, 2),
+                    "Tempo Stimato (min)": round(total_duration, 0)
+                })
+    
+    return risultati_totali, round(distanza_totale_complessiva, 2), round(durata_totale_complessiva, 0)
+
 # Sezione per il caricamento del file
 uploaded_file = st.file_uploader("Carica il tuo file CSV", type=["csv"])
 
@@ -146,177 +219,212 @@ if uploaded_file:
         st.subheader("Anteprima dei dati")
         st.dataframe(df.head())
         
-        # Processo di aggiunta degli indirizzi se necessario
-        if df.empty or (len(df) == 1 and df.iloc[0].isna().all()):
-            st.info("Il file CSV è vuoto. Aggiungi i tuoi indirizzi.")
-            
-            with st.form("add_address_form"):
-                casa = st.text_input("Indirizzo di casa")
-                lavoro = st.text_input("Indirizzo di lavoro")
-                giorno = st.date_input("Giorno", datetime.now())
-                
-                submit = st.form_submit_button("Aggiungi")
-                
-                if submit and casa and lavoro:
-                    new_row = pd.DataFrame({"CASA": [casa], "LAVORO": [lavoro], "GIORNO": [giorno.strftime("%d/%m/%Y")]})
-                    df = pd.concat([df, new_row], ignore_index=True)
-                    st.success("Indirizzo aggiunto!")
-                    st.dataframe(df)
+        # Aggiungi tab per separare le funzionalità
+        tab1, tab2 = st.tabs(["Calcolo Giornaliero", "Riepilogo Totale"])
         
-        # Sezione per selezionare un giorno dal CSV
-        if not df.empty:
-            giorni_disponibili = df["GIORNO"].unique().tolist()
-            
-            if giorni_disponibili:
-                giorno_selezionato = st.selectbox("Seleziona un giorno", giorni_disponibili)
+        with tab1:
+            # Processo di aggiunta degli indirizzi se necessario
+            if df.empty or (len(df) == 1 and df.iloc[0].isna().all()):
+                st.info("Il file CSV è vuoto. Aggiungi i tuoi indirizzi.")
                 
-                if st.button("Calcola Tragitto Ottimale"):
-                    # Filtra per il giorno selezionato
-                    filtered_df = df[df["GIORNO"] == giorno_selezionato]
+                with st.form("add_address_form"):
+                    casa = st.text_input("Indirizzo di casa")
+                    lavoro = st.text_input("Indirizzo di lavoro")
+                    giorno = st.date_input("Giorno", datetime.now())
                     
-                    if not filtered_df.empty:
-                        # Ottieni tutti gli indirizzi unici per quel giorno
-                        casa_address = filtered_df["CASA"].iloc[0]  # Prendiamo il primo indirizzo casa come punto di partenza
-                        lavoro_addresses = filtered_df["LAVORO"].unique().tolist()
+                    submit = st.form_submit_button("Aggiungi")
+                    
+                    if submit and casa and lavoro:
+                        new_row = pd.DataFrame({"CASA": [casa], "LAVORO": [lavoro], "GIORNO": [giorno.strftime("%d/%m/%Y")]})
+                        df = pd.concat([df, new_row], ignore_index=True)
+                        st.success("Indirizzo aggiunto!")
+                        st.dataframe(df)
+            
+            # Sezione per selezionare un giorno dal CSV
+            if not df.empty:
+                giorni_disponibili = df["GIORNO"].unique().tolist()
+                
+                if giorni_disponibili:
+                    giorno_selezionato = st.selectbox("Seleziona un giorno", giorni_disponibili)
+                    
+                    if st.button("Calcola Tragitto Ottimale"):
+                        # Filtra per il giorno selezionato
+                        filtered_df = df[df["GIORNO"] == giorno_selezionato]
                         
-                        st.write(f"**Giorno selezionato:** {giorno_selezionato}")
-                        st.write(f"**Indirizzo casa:** {casa_address}")
-                        st.write(f"**Indirizzi lavoro ({len(lavoro_addresses)}):**")
-                        for i, addr in enumerate(lavoro_addresses, 1):
-                            st.write(f"{i}. {addr}")
-                        
-                        # Geocodifica tutti gli indirizzi
-                        with st.spinner("Geocodifica degli indirizzi in corso..."):
-                            coords_casa = geocode_address(casa_address)
+                        if not filtered_df.empty:
+                            # Ottieni tutti gli indirizzi unici per quel giorno
+                            casa_address = filtered_df["CASA"].iloc[0]  # Prendiamo il primo indirizzo casa come punto di partenza
+                            lavoro_addresses = filtered_df["LAVORO"].unique().tolist()
                             
-                            if coords_casa is None:
-                                st.error(f"Impossibile geocodificare l'indirizzo di casa: {casa_address}")
-                                st.stop()
+                            st.write(f"**Giorno selezionato:** {giorno_selezionato}")
+                            st.write(f"**Indirizzo casa:** {casa_address}")
+                            st.write(f"**Indirizzi lavoro ({len(lavoro_addresses)}):**")
+                            for i, addr in enumerate(lavoro_addresses, 1):
+                                st.write(f"{i}. {addr}")
                             
-                            coords_lavoro_list = []
-                            for addr in lavoro_addresses:
-                                coords = geocode_address(addr)
-                                if coords is None:
-                                    st.error(f"Impossibile geocodificare l'indirizzo di lavoro: {addr}")
+                            # Geocodifica tutti gli indirizzi
+                            with st.spinner("Geocodifica degli indirizzi in corso..."):
+                                coords_casa = geocode_address(casa_address)
+                                
+                                if coords_casa is None:
+                                    st.error(f"Impossibile geocodificare l'indirizzo di casa: {casa_address}")
                                     st.stop()
-                                coords_lavoro_list.append(coords)
-                        
-                        # Crea lista completa di coordinate con casa come prima posizione
-                        all_coords = [coords_casa] + coords_lavoro_list
-                        all_addresses = [casa_address] + lavoro_addresses
-                        
-                        # Calcola la matrice delle distanze
-                        with st.spinner("Calcolo delle distanze tra tutti i punti..."):
-                            distances, durations = calculate_distance_matrix(all_coords)
-                            
-                            if distances is None or durations is None:
-                                st.error("Impossibile calcolare la matrice delle distanze.")
-                                st.stop()
-                        
-                        # Trova il percorso ottimale
-                        with st.spinner("Calcolo del percorso ottimale..."):
-                            # Casa è sempre indice 0
-                            optimal_route = find_optimal_route(distances, 0)
-                            
-                            # Calcola la distanza totale e la durata
-                            total_distance = 0
-                            total_duration = 0
-                            
-                            for i in range(len(optimal_route) - 1):
-                                from_idx = optimal_route[i]
-                                to_idx = optimal_route[i + 1]
-                                total_distance += distances[from_idx, to_idx]
-                                total_duration += durations[from_idx, to_idx]
-                        
-                        # Mostra i risultati
-                        st.subheader("Percorso Ottimale")
-                        
-                        # Tabella del percorso
-                        route_data = []
-                        for i in range(len(optimal_route)):
-                            idx = optimal_route[i]
-                            address = all_addresses[idx]
-                            address_type = "Casa" if idx == 0 else "Lavoro"
-                            
-                            # Calcola distanza dal punto precedente (tranne per il primo punto)
-                            distance_from_prev = None
-                            if i > 0:
-                                prev_idx = optimal_route[i-1]
-                                distance_from_prev = distances[prev_idx, idx]
-                            
-                            route_data.append({
-                                "Tappa": i + 1,
-                                "Tipo": address_type,
-                                "Indirizzo": address,
-                                "Distanza dalla tappa precedente (km)": f"{distance_from_prev:.2f}" if distance_from_prev is not None else "-"
-                            })
-                        
-                        route_df = pd.DataFrame(route_data)
-                        st.table(route_df)
-                        
-                        # Riepilogo totali
-                        st.subheader("Riepilogo")
-                        st.write(f"**Distanza totale:** {total_distance:.2f} km")
-                        st.write(f"**Tempo totale stimato:** {total_duration:.0f} minuti")
-                        
-                        # Creazione di link per visualizzare l'intero percorso su Google Maps
-                        st.subheader("Visualizza su Google Maps")
-                        
-                        waypoints = []
-                        for i in range(1, len(optimal_route) - 1):  # Escludi il primo e l'ultimo (Casa -> Lavori -> Casa)
-                            idx = optimal_route[i]
-                            waypoints.append(f"{all_coords[idx][0]},{all_coords[idx][1]}")
-                        
-                        # Link a Google Maps con waypoints
-                        if waypoints:
-                            start_coords = all_coords[optimal_route[0]]
-                            end_coords = all_coords[optimal_route[-1]]
-                            waypoints_str = "|".join(waypoints)
-                            
-                            google_maps_url = (
-                                f"https://www.google.com/maps/dir/?api=1"
-                                f"&origin={start_coords[0]},{start_coords[1]}"
-                                f"&destination={end_coords[0]},{end_coords[1]}"
-                                f"&waypoints={waypoints_str}"
-                                f"&travelmode=driving"
-                            )
-                            
-                            st.markdown(f"[Apri intero percorso in Google Maps]({google_maps_url})")
-                        else:
-                            # Se c'è solo un punto lavoro
-                            google_maps_url = (
-                                f"https://www.google.com/maps/dir/?api=1"
-                                f"&origin={all_coords[optimal_route[0]][0]},{all_coords[optimal_route[0]][1]}"
-                                f"&destination={all_coords[optimal_route[-1]][0]},{all_coords[optimal_route[-1]][1]}"
-                                f"&travelmode=driving"
-                            )
-                            
-                            st.markdown(f"[Apri percorso in Google Maps]({google_maps_url})")
-                        
-                        # Link singoli per ogni segmento del percorso
-                        with st.expander("Link ai segmenti del percorso"):
-                            for i in range(len(optimal_route) - 1):
-                                from_idx = optimal_route[i]
-                                to_idx = optimal_route[i + 1]
                                 
-                                from_coords = all_coords[from_idx]
-                                to_coords = all_coords[to_idx]
+                                coords_lavoro_list = []
+                                for addr in lavoro_addresses:
+                                    coords = geocode_address(addr)
+                                    if coords is None:
+                                        st.error(f"Impossibile geocodificare l'indirizzo di lavoro: {addr}")
+                                        st.stop()
+                                    coords_lavoro_list.append(coords)
+                            
+                            # Crea lista completa di coordinate con casa come prima posizione
+                            all_coords = [coords_casa] + coords_lavoro_list
+                            all_addresses = [casa_address] + lavoro_addresses
+                            
+                            # Calcola la matrice delle distanze
+                            with st.spinner("Calcolo delle distanze tra tutti i punti..."):
+                                distances, durations = calculate_distance_matrix(all_coords)
                                 
-                                from_address = all_addresses[from_idx]
-                                to_address = all_addresses[to_idx]
+                                if distances is None or durations is None:
+                                    st.error("Impossibile calcolare la matrice delle distanze.")
+                                    st.stop()
+                            
+                            # Trova il percorso ottimale
+                            with st.spinner("Calcolo del percorso ottimale..."):
+                                # Casa è sempre indice 0
+                                optimal_route = find_optimal_route(distances, 0)
                                 
-                                segment_url = (
+                                # Calcola la distanza totale e la durata
+                                total_distance = 0
+                                total_duration = 0
+                                
+                                for i in range(len(optimal_route) - 1):
+                                    from_idx = optimal_route[i]
+                                    to_idx = optimal_route[i + 1]
+                                    total_distance += distances[from_idx, to_idx]
+                                    total_duration += durations[from_idx, to_idx]
+                            
+                            # Mostra i risultati
+                            st.subheader("Percorso Ottimale")
+                            
+                            # Tabella del percorso
+                            route_data = []
+                            for i in range(len(optimal_route)):
+                                idx = optimal_route[i]
+                                address = all_addresses[idx]
+                                address_type = "Casa" if idx == 0 else "Lavoro"
+                                
+                                # Calcola distanza dal punto precedente (tranne per il primo punto)
+                                distance_from_prev = None
+                                if i > 0:
+                                    prev_idx = optimal_route[i-1]
+                                    distance_from_prev = distances[prev_idx, idx]
+                                
+                                route_data.append({
+                                    "Tappa": i + 1,
+                                    "Tipo": address_type,
+                                    "Indirizzo": address,
+                                    "Distanza dalla tappa precedente (km)": f"{distance_from_prev:.2f}" if distance_from_prev is not None else "-"
+                                })
+                            
+                            route_df = pd.DataFrame(route_data)
+                            st.table(route_df)
+                            
+                            # Riepilogo totali
+                            st.subheader("Riepilogo")
+                            st.write(f"**Distanza totale:** {total_distance:.2f} km")
+                            st.write(f"**Tempo totale stimato:** {total_duration:.0f} minuti")
+                            
+                            # Creazione di link per visualizzare l'intero percorso su Google Maps
+                            st.subheader("Visualizza su Google Maps")
+                            
+                            waypoints = []
+                            for i in range(1, len(optimal_route) - 1):  # Escludi il primo e l'ultimo (Casa -> Lavori -> Casa)
+                                idx = optimal_route[i]
+                                waypoints.append(f"{all_coords[idx][0]},{all_coords[idx][1]}")
+                            
+                            # Link a Google Maps con waypoints
+                            if waypoints:
+                                start_coords = all_coords[optimal_route[0]]
+                                end_coords = all_coords[optimal_route[-1]]
+                                waypoints_str = "|".join(waypoints)
+                                
+                                google_maps_url = (
                                     f"https://www.google.com/maps/dir/?api=1"
-                                    f"&origin={from_coords[0]},{from_coords[1]}"
-                                    f"&destination={to_coords[0]},{to_coords[1]}"
+                                    f"&origin={start_coords[0]},{start_coords[1]}"
+                                    f"&destination={end_coords[0]},{end_coords[1]}"
+                                    f"&waypoints={waypoints_str}"
                                     f"&travelmode=driving"
                                 )
                                 
-                                st.markdown(f"[{from_address} → {to_address}]({segment_url})")
+                                st.markdown(f"[Apri intero percorso in Google Maps]({google_maps_url})")
+                            else:
+                                # Se c'è solo un punto lavoro
+                                google_maps_url = (
+                                    f"https://www.google.com/maps/dir/?api=1"
+                                    f"&origin={all_coords[optimal_route[0]][0]},{all_coords[optimal_route[0]][1]}"
+                                    f"&destination={all_coords[optimal_route[-1]][0]},{all_coords[optimal_route[-1]][1]}"
+                                    f"&travelmode=driving"
+                                )
+                                
+                                st.markdown(f"[Apri percorso in Google Maps]({google_maps_url})")
+                            
+                            # Link singoli per ogni segmento del percorso
+                            with st.expander("Link ai segmenti del percorso"):
+                                for i in range(len(optimal_route) - 1):
+                                    from_idx = optimal_route[i]
+                                    to_idx = optimal_route[i + 1]
+                                    
+                                    from_coords = all_coords[from_idx]
+                                    to_coords = all_coords[to_idx]
+                                    
+                                    from_address = all_addresses[from_idx]
+                                    to_address = all_addresses[to_idx]
+                                    
+                                    segment_url = (
+                                        f"https://www.google.com/maps/dir/?api=1"
+                                        f"&origin={from_coords[0]},{from_coords[1]}"
+                                        f"&destination={to_coords[0]},{to_coords[1]}"
+                                        f"&travelmode=driving"
+                                    )
+                                    
+                                    st.markdown(f"[{from_address} → {to_address}]({segment_url})")
+                        else:
+                            st.warning(f"Nessun dato trovato per il giorno {giorno_selezionato}.")
+                else:
+                    st.warning("Nessun giorno trovato nel file CSV.")
+        
+        with tab2:
+            st.subheader("Calcolo Sommatoria Chilometri per Tutti i Giorni")
+            
+            if not df.empty:
+                if st.button("Calcola Totale per Tutti i Giorni"):
+                    risultati_totali, distanza_totale_complessiva, durata_totale_complessiva = calculate_total_km_for_all_days(df)
+                    
+                    if risultati_totali:
+                        # Visualizza tabella con i risultati per ogni giorno
+                        st.subheader("Dettaglio per Giorno")
+                        risultati_df = pd.DataFrame(risultati_totali)
+                        st.table(risultati_df)
+                        
+                        # Visualizza i totali complessivi
+                        st.subheader("Riepilogo Complessivo")
+                        st.write(f"**Numero totale di giorni:** {len(risultati_totali)}")
+                        st.write(f"**Distanza totale complessiva:** {distanza_totale_complessiva} km")
+                        st.write(f"**Tempo totale stimato complessivo:** {durata_totale_complessiva} minuti")
+                        
+                        # Visualizza un grafico delle distanze per giorno
+                        st.subheader("Grafico delle Distanze per Giorno")
+                        chart_data = pd.DataFrame({
+                            'Giorno': [r['Giorno'] for r in risultati_totali],
+                            'Distanza (km)': [r['Distanza Totale (km)'] for r in risultati_totali]
+                        })
+                        st.bar_chart(chart_data.set_index('Giorno'))
                     else:
-                        st.warning(f"Nessun dato trovato per il giorno {giorno_selezionato}.")
+                        st.warning("Non è stato possibile calcolare i percorsi per nessun giorno.")
             else:
-                st.warning("Nessun giorno trovato nel file CSV.")
+                st.info("Carica un file CSV con dati validi per calcolare la sommatoria dei chilometri.")
 else:
     st.info("Carica un file CSV con colonne 'CASA', 'LAVORO' e 'GIORNO' per iniziare.")
     
@@ -359,8 +467,9 @@ with st.expander("Come usare questa applicazione"):
     ### Istruzioni per l'uso
     
     1. **Carica il tuo file CSV** con le colonne CASA, LAVORO e GIORNO.
-    2. **Seleziona un giorno** dalla lista dei giorni disponibili.
+    2. **Seleziona un giorno** dalla lista dei giorni disponibili oppure usa la tab "Riepilogo Totale" per calcolare i km totali per tutti i giorni.
     3. **Premi 'Calcola Tragitto Ottimale'** per vedere il percorso ottimale che inizia da casa, passa per tutti i luoghi di lavoro e torna a casa.
+    4. **Premi 'Calcola Totale per Tutti i Giorni'** nella tab "Riepilogo Totale" per vedere la sommatoria dei chilometri per tutti i giorni.
     
     ### Formato del file CSV
     
@@ -381,6 +490,7 @@ with st.expander("Come usare questa applicazione"):
     - L'applicazione calcola il percorso ottimale partendo da casa, passando per tutti i luoghi di lavoro e tornando a casa.
     - Per ogni giorno, puoi avere più luoghi di lavoro da visitare.
     - L'applicazione utilizza API gratuite (OpenStreetMap e OSRM) per la geocodifica e il calcolo del percorso.
+    - Il calcolo della sommatoria totale può richiedere tempo se ci sono molti giorni/indirizzi.
     """)
 
 # Footer con informazioni
