@@ -1,41 +1,46 @@
 import streamlit as st
+import pandas as pd
 import requests
 import folium
-from folium.features import DivIcon
-import polyline
 from streamlit_folium import folium_static
-import pandas as pd
+import numpy as np
 from datetime import datetime
-import json
+import os
 
-# Titolo dell'app
-st.title("Pianificatore del Tragitto Casa-Lavoro")
+st.set_page_config(page_title="Calcolatore Tragitto", layout="wide")
 
-# Sidebar per l'inserimento degli indirizzi e la data
-with st.sidebar:
-    st.header("Impostazioni")
-    
-    # Inserimento degli indirizzi
-    casa_address = st.text_input("Indirizzo di Casa", value="Via Roma 1, Milano")
-    lavoro_address = st.text_input("Indirizzo di Lavoro", value="Via Dante 15, Milano")
-    
-    # Selezione della data
-    selected_date = st.date_input("Seleziona il giorno", datetime.now())
-    
-    # Pulsante per calcolare il percorso
-    calculate_button = st.button("Calcola Percorso", type="primary")
+st.title("Calcolatore del Tragitto Minimo Casa-Lavoro")
 
-# Funzione per convertire indirizzo in coordinate usando Nominatim (OpenStreetMap)
+# Funzione per caricare il file CSV
+def load_csv(uploaded_file):
+    if uploaded_file is not None:
+        try:
+            # Prova prima con punto e virgola come separatore (formato italiano comune)
+            df = pd.read_csv(uploaded_file, sep=";")
+            # Controlla se abbiamo le colonne attese
+            if not all(col in df.columns for col in ["CASA", "LAVORO", "GIORNO"]):
+                # Prova con virgola come separatore
+                df = pd.read_csv(uploaded_file, sep=",")
+            
+            # Pulisci gli spazi bianchi nelle intestazioni
+            df.columns = df.columns.str.strip()
+            return df
+        except Exception as e:
+            st.error(f"Errore nel caricamento del file: {e}")
+            return None
+    return None
+
+# Funzione per geocodificare un indirizzo usando OpenStreetMap Nominatim API
 def geocode_address(address):
     try:
         base_url = "https://nominatim.openstreetmap.org/search"
         params = {
             "q": address,
             "format": "json",
-            "limit": 1,
+            "limit": 1
         }
         headers = {
-            "User-Agent": "TraggittoMinimoApp/1.0"  # È buona pratica fornire un User-Agent
+            "User-Agent": "TragittoCalculator/1.0"  # Necessario per le regole di Nominatim
         }
         
         response = requests.get(base_url, params=params, headers=headers)
@@ -44,192 +49,229 @@ def geocode_address(address):
         if data and len(data) > 0:
             lat = float(data[0]["lat"])
             lon = float(data[0]["lon"])
-            display_name = data[0]["display_name"]
-            return lat, lon, display_name
+            return lat, lon
         else:
-            st.error(f"Impossibile trovare l'indirizzo: {address}")
-            return None, None, None
+            return None
     except Exception as e:
-        st.error(f"Errore durante la geocodifica: {str(e)}")
-        return None, None, None
+        st.error(f"Errore durante la geocodifica: {e}")
+        return None
 
-# Funzione per calcolare il percorso usando OSRM
+# Funzione per calcolare il percorso tra due punti usando OSRM
 def get_route(start_coords, end_coords):
     try:
-        url = f"http://router.project-osrm.org/route/v1/driving/{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}?overview=full&geometries=polyline"
-        response = requests.get(url)
+        base_url = "http://router.project-osrm.org/route/v1/driving/"
+        url = f"{base_url}{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}"
+        params = {
+            "overview": "full",
+            "geometries": "geojson"
+        }
+        
+        response = requests.get(url, params=params)
         data = response.json()
         
-        if data["code"] != "Ok":
-            st.error("Errore nel calcolo del percorso")
-            return None, None
-        
-        route = data["routes"][0]
-        geometry = route["geometry"]
-        duration = route["duration"] / 60  # Convertito in minuti
-        distance = route["distance"] / 1000  # Convertito in km
-        
-        # Decodifica la geometria polyline
-        decoded_polyline = polyline.decode(geometry)
-        
-        return decoded_polyline, {"duration": duration, "distance": distance}
-    except Exception as e:
-        st.error(f"Errore durante il calcolo del percorso: {str(e)}")
-        return None, None
-
-# Funzione per visualizzare il percorso sulla mappa
-def display_route(casa_coords, lavoro_coords, route_casa_lavoro, route_lavoro_casa, casa_name, lavoro_name, metrics_casa_lavoro, metrics_lavoro_casa):
-    # Creare una mappa centrata tra i due punti
-    center_lat = (casa_coords[0] + lavoro_coords[0]) / 2
-    center_lon = (casa_coords[1] + lavoro_coords[1]) / 2
-    my_map = folium.Map(location=[center_lat, center_lon], zoom_start=12)
-    
-    # Aggiungere marker per casa e lavoro
-    folium.Marker(
-        location=[casa_coords[0], casa_coords[1]],
-        popup=casa_name,
-        tooltip="Casa",
-        icon=folium.Icon(icon="home", prefix="fa", color="green")
-    ).add_to(my_map)
-    
-    folium.Marker(
-        location=[lavoro_coords[0], lavoro_coords[1]],
-        popup=lavoro_name,
-        tooltip="Lavoro",
-        icon=folium.Icon(icon="briefcase", prefix="fa", color="blue")
-    ).add_to(my_map)
-    
-    # Aggiungere il percorso Casa -> Lavoro
-    folium.PolyLine(
-        route_casa_lavoro,
-        color="blue",
-        weight=4,
-        opacity=0.8,
-        tooltip="Casa -> Lavoro"
-    ).add_to(my_map)
-    
-    # Aggiungere il percorso Lavoro -> Casa
-    folium.PolyLine(
-        route_lavoro_casa,
-        color="green",
-        weight=4,
-        opacity=0.8,
-        tooltip="Lavoro -> Casa"
-    ).add_to(my_map)
-    
-    # Aggiungi etichette alle linee
-    midpoint_casa_lavoro = route_casa_lavoro[len(route_casa_lavoro) // 2]
-    folium.map.Marker(
-        location=midpoint_casa_lavoro,
-        icon=DivIcon(
-            icon_size=(150, 36),
-            icon_anchor=(75, 18),
-            html=f'<div style="font-size: 12pt; color: blue; text-align: center;">Casa → Lavoro</div>'
-        )
-    ).add_to(my_map)
-    
-    midpoint_lavoro_casa = route_lavoro_casa[len(route_lavoro_casa) // 2]
-    folium.map.Marker(
-        location=midpoint_lavoro_casa,
-        icon=DivIcon(
-            icon_size=(150, 36),
-            icon_anchor=(75, 18),
-            html=f'<div style="font-size: 12pt; color: green; text-align: center;">Lavoro → Casa</div>'
-        )
-    ).add_to(my_map)
-    
-    return my_map
-
-# Esegui il calcolo quando si preme il pulsante
-if calculate_button:
-    # Geocodifica degli indirizzi
-    casa_lat, casa_lon, casa_display = geocode_address(casa_address)
-    lavoro_lat, lavoro_lon, lavoro_display = geocode_address(lavoro_address)
-    
-    if casa_lat and lavoro_lat:
-        casa_coords = (casa_lat, casa_lon)
-        lavoro_coords = (lavoro_lat, lavoro_lon)
-        
-        # Calcola percorsi
-        route_casa_lavoro, metrics_casa_lavoro = get_route(casa_coords, lavoro_coords)
-        route_lavoro_casa, metrics_lavoro_casa = get_route(lavoro_coords, casa_coords)
-        
-        if route_casa_lavoro and route_lavoro_casa:
-            # Mostra informazioni sul percorso
-            st.header(f"Percorso per {selected_date.strftime('%d/%m/%Y')}")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("Casa → Lavoro")
-                st.write(f"Distanza: {metrics_casa_lavoro['distance']:.2f} km")
-                st.write(f"Durata: {metrics_casa_lavoro['duration']:.1f} minuti")
-            
-            with col2:
-                st.subheader("Lavoro → Casa")
-                st.write(f"Distanza: {metrics_lavoro_casa['distance']:.2f} km")
-                st.write(f"Durata: {metrics_lavoro_casa['duration']:.1f} minuti")
-            
-            st.subheader("Percorso completo")
-            st.write(f"Distanza totale: {metrics_casa_lavoro['distance'] + metrics_lavoro_casa['distance']:.2f} km")
-            st.write(f"Durata totale: {metrics_casa_lavoro['duration'] + metrics_lavoro_casa['duration']:.1f} minuti")
-            
-            # Visualizza sulla mappa
-            my_map = display_route(
-                casa_coords, lavoro_coords, 
-                route_casa_lavoro, route_lavoro_casa,
-                casa_display, lavoro_display,
-                metrics_casa_lavoro, metrics_lavoro_casa
-            )
-            
-            st.subheader("Mappa del percorso")
-            folium_static(my_map)
-            
-            # Tabella riassuntiva
-            st.subheader("Riepilogo")
-            data = {
-                "Percorso": ["Casa → Lavoro", "Lavoro → Casa", "Totale"],
-                "Distanza (km)": [
-                    f"{metrics_casa_lavoro['distance']:.2f}",
-                    f"{metrics_lavoro_casa['distance']:.2f}",
-                    f"{metrics_casa_lavoro['distance'] + metrics_lavoro_casa['distance']:.2f}"
-                ],
-                "Durata (min)": [
-                    f"{metrics_casa_lavoro['duration']:.1f}",
-                    f"{metrics_lavoro_casa['duration']:.1f}",
-                    f"{metrics_casa_lavoro['duration'] + metrics_lavoro_casa['duration']:.1f}"
-                ]
-            }
-            df = pd.DataFrame(data)
-            st.table(df)
-            
-            # Salva le informazioni del tragitto (puoi implementare il salvataggio in un file se necessario)
-            saved_info = {
-                "data": selected_date.strftime('%Y-%m-%d'),
-                "casa": casa_address,
-                "lavoro": lavoro_address,
-                "distanza_totale": metrics_casa_lavoro['distance'] + metrics_lavoro_casa['distance'],
-                "durata_totale": metrics_casa_lavoro['duration'] + metrics_lavoro_casa['duration']
-            }
-            st.session_state.saved_info = saved_info
+        if data["code"] == "Ok":
+            route = data["routes"][0]
+            distance = route["distance"] / 1000  # Converti in km
+            duration = route["duration"] / 60  # Converti in minuti
+            geometry = route["geometry"]
+            return distance, duration, geometry
         else:
-            st.error("Impossibile calcolare i percorsi")
-    else:
-        st.error("Verifica che gli indirizzi inseriti siano corretti")
+            st.warning("Non è stato possibile calcolare il percorso")
+            return None, None, None
+    except Exception as e:
+        st.error(f"Errore durante il calcolo del percorso: {e}")
+        return None, None, None
 
-# Mostra informazioni sulla modalità d'uso
-if not calculate_button:
-    st.info("""
-    ### Come usare l'app:
-    1. Inserisci gli indirizzi di casa e lavoro nella barra laterale
-    2. Seleziona la data di interesse
-    3. Clicca su 'Calcola Percorso'
+# Sezione per il caricamento del file
+uploaded_file = st.file_uploader("Carica il tuo file CSV", type=["csv"])
+
+if uploaded_file:
+    df = load_csv(uploaded_file)
     
-    L'app calcolerà il tragitto minimo Casa → Lavoro → Casa e mostrerà i dettagli sulla mappa.
+    if df is not None:
+        st.success("File caricato con successo!")
+        
+        # Mostra anteprima dei dati
+        st.subheader("Anteprima dei dati")
+        st.dataframe(df.head())
+        
+        # Processo di aggiunta degli indirizzi se necessario
+        if df.empty or (len(df) == 1 and df.iloc[0].isna().all()):
+            st.info("Il file CSV è vuoto. Aggiungi i tuoi indirizzi.")
+            
+            with st.form("add_address_form"):
+                casa = st.text_input("Indirizzo di casa")
+                lavoro = st.text_input("Indirizzo di lavoro")
+                giorno = st.date_input("Giorno", datetime.now())
+                
+                submit = st.form_submit_button("Aggiungi")
+                
+                if submit and casa and lavoro:
+                    new_row = pd.DataFrame({"CASA": [casa], "LAVORO": [lavoro], "GIORNO": [giorno.strftime("%d/%m/%Y")]})
+                    df = pd.concat([df, new_row], ignore_index=True)
+                    st.success("Indirizzo aggiunto!")
+                    st.dataframe(df)
+        
+        # Sezione per selezionare un giorno dal CSV
+        if not df.empty:
+            giorni_disponibili = df["GIORNO"].unique().tolist()
+            
+            if giorni_disponibili:
+                giorno_selezionato = st.selectbox("Seleziona un giorno", giorni_disponibili)
+                
+                if st.button("Calcola Tragitto"):
+                    # Filtra per il giorno selezionato
+                    filtered_df = df[df["GIORNO"] == giorno_selezionato]
+                    
+                    if not filtered_df.empty:
+                        indirizzo_casa = filtered_df["CASA"].iloc[0]
+                        indirizzo_lavoro = filtered_df["LAVORO"].iloc[0]
+                        
+                        # Geocodifica gli indirizzi
+                        with st.spinner("Geocodifica degli indirizzi in corso..."):
+                            coords_casa = geocode_address(indirizzo_casa)
+                            coords_lavoro = geocode_address(indirizzo_lavoro)
+                        
+                        if coords_casa and coords_lavoro:
+                            # Calcola il percorso (andata e ritorno)
+                            with st.spinner("Calcolo del percorso in corso..."):
+                                distance_andata, duration_andata, geometry_andata = get_route(coords_casa, coords_lavoro)
+                                distance_ritorno, duration_ritorno, geometry_ritorno = get_route(coords_lavoro, coords_casa)
+                            
+                            if distance_andata and distance_ritorno:
+                                # Mostra i risultati
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    st.subheader("Dettagli del Tragitto")
+                                    st.write(f"**Casa:** {indirizzo_casa}")
+                                    st.write(f"**Lavoro:** {indirizzo_lavoro}")
+                                    st.write(f"**Giorno:** {giorno_selezionato}")
+                                    st.write(f"**Distanza totale:** {distance_andata + distance_ritorno:.2f} km")
+                                    st.write(f"**Tempo totale stimato:** {(duration_andata + duration_ritorno):.0f} minuti")
+                                    
+                                    st.write("---")
+                                    st.write("**Dettagli Andata:**")
+                                    st.write(f"Distanza: {distance_andata:.2f} km")
+                                    st.write(f"Tempo stimato: {duration_andata:.0f} minuti")
+                                    
+                                    st.write("**Dettagli Ritorno:**")
+                                    st.write(f"Distanza: {distance_ritorno:.2f} km")
+                                    st.write(f"Tempo stimato: {duration_ritorno:.0f} minuti")
+                                
+                                with col2:
+                                    # Creazione mappa
+                                    m = folium.Map(location=coords_casa, zoom_start=12)
+                                    
+                                    # Marker per casa e lavoro
+                                    folium.Marker(
+                                        location=coords_casa,
+                                        popup="Casa",
+                                        icon=folium.Icon(color="green", icon="home")
+                                    ).add_to(m)
+                                    
+                                    folium.Marker(
+                                        location=coords_lavoro,
+                                        popup="Lavoro",
+                                        icon=folium.Icon(color="red", icon="briefcase")
+                                    ).add_to(m)
+                                    
+                                    # Aggiungi il percorso di andata
+                                    folium.GeoJson(
+                                        geometry_andata,
+                                        name="Andata",
+                                        style_function=lambda x: {
+                                            "color": "blue",
+                                            "weight": 4,
+                                            "opacity": 0.8
+                                        }
+                                    ).add_to(m)
+                                    
+                                    # Aggiungi il percorso di ritorno
+                                    folium.GeoJson(
+                                        geometry_ritorno,
+                                        name="Ritorno",
+                                        style_function=lambda x: {
+                                            "color": "red",
+                                            "weight": 4,
+                                            "opacity": 0.8
+                                        }
+                                    ).add_to(m)
+                                    
+                                    # Aggiungi controllo layer
+                                    folium.LayerControl().add_to(m)
+                                    
+                                    # Mostra la mappa
+                                    folium_static(m)
+                            else:
+                                st.error("Non è stato possibile calcolare il percorso.")
+                        else:
+                            st.error("Non è stato possibile trovare le coordinate degli indirizzi.")
+            else:
+                st.warning("Nessun giorno trovato nel file CSV.")
+else:
+    st.info("Carica un file CSV con colonne 'CASA', 'LAVORO' e 'GIORNO' per iniziare.")
+    
+    # Aggiungi opzione per creare un nuovo file
+    if st.button("Crea nuovo file"):
+        # Crea un DataFrame vuoto con le colonne necessarie
+        df = pd.DataFrame(columns=["CASA", "LAVORO", "GIORNO"])
+        
+        # Aggiungi interfaccia per inserire i dati
+        with st.form("create_new_form"):
+            casa = st.text_input("Indirizzo di casa")
+            lavoro = st.text_input("Indirizzo di lavoro")
+            giorno = st.date_input("Giorno", datetime.now())
+            
+            submit = st.form_submit_button("Aggiungi")
+            
+            if submit and casa and lavoro:
+                new_row = pd.DataFrame({
+                    "CASA": [casa], 
+                    "LAVORO": [lavoro], 
+                    "GIORNO": [giorno.strftime("%d/%m/%Y")]
+                })
+                df = pd.concat([df, new_row], ignore_index=True)
+                
+                # Scarica il file creato
+                csv = df.to_csv(sep=";", index=False)
+                st.download_button(
+                    label="Scarica CSV",
+                    data=csv,
+                    file_name="indirizzi.csv",
+                    mime="text/csv"
+                )
+                
+                st.success("File creato con successo!")
+                st.dataframe(df)
+
+# Aggiungi istruzioni d'uso
+with st.expander("Come usare questa applicazione"):
+    st.markdown("""
+    ### Istruzioni per l'uso
+    
+    1. **Carica il tuo file CSV** con le colonne CASA, LAVORO e GIORNO.
+    2. **Seleziona un giorno** dalla lista dei giorni disponibili.
+    3. **Premi 'Calcola Tragitto'** per vedere il percorso minimo tra casa e lavoro.
+    
+    ### Formato del file CSV
+    
+    Il file CSV deve avere le seguenti colonne:
+    - **CASA**: indirizzo completo dell'abitazione
+    - **LAVORO**: indirizzo completo del posto di lavoro
+    - **GIORNO**: data nel formato GG/MM/AAAA
+    
+    Esempio:
+    ```
+    CASA;LAVORO;GIORNO
+    Via Roma 1, Milano;Via Dante 15, Milano;01/05/2025
+    ```
+    
+    ### Note
+    - L'applicazione utilizza API gratuite (OpenStreetMap e OSRM) per la geocodifica e il calcolo del percorso.
+    - I risultati mostrano sia il tragitto di andata che quello di ritorno, iniziando e finendo sempre dall'indirizzo 'CASA'.
     """)
-    
-    # Esempio di immagine placeholder per la mappa (quando non ci sono ancora dati)
-    st.image("https://via.placeholder.com/800x400?text=Inserisci+gli+indirizzi+e+calcola+il+percorso", use_column_width=True)
 
-# Informazioni sul footer
+# Footer con informazioni
 st.markdown("---")
-st.markdown("App creata per calcolare il tragitto minimo Casa-Lavoro utilizzando le API gratuite di OpenStreetMap")
+st.markdown("Applicazione creata con Streamlit. Utilizza le API gratuite di OpenStreetMap e OSRM.")
