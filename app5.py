@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import requests
-import folium
-from streamlit_folium import folium_static
 import numpy as np
 from datetime import datetime
 import os
@@ -73,14 +71,13 @@ def get_route(start_coords, end_coords):
             route = data["routes"][0]
             distance = route["distance"] / 1000  # Converti in km
             duration = route["duration"] / 60  # Converti in minuti
-            geometry = route["geometry"]
-            return distance, duration, geometry
+            return distance, duration
         else:
             st.warning("Non è stato possibile calcolare il percorso")
-            return None, None, None
+            return None, None
     except Exception as e:
         st.error(f"Errore durante il calcolo del percorso: {e}")
-        return None, None, None
+        return None, None
 
 # Sezione per il caricamento del file
 uploaded_file = st.file_uploader("Carica il tuo file CSV", type=["csv"])
@@ -135,74 +132,39 @@ if uploaded_file:
                         if coords_casa and coords_lavoro:
                             # Calcola il percorso (andata e ritorno)
                             with st.spinner("Calcolo del percorso in corso..."):
-                                distance_andata, duration_andata, geometry_andata = get_route(coords_casa, coords_lavoro)
-                                distance_ritorno, duration_ritorno, geometry_ritorno = get_route(coords_lavoro, coords_casa)
+                                distance_andata, duration_andata = get_route(coords_casa, coords_lavoro)
+                                distance_ritorno, duration_ritorno = get_route(coords_lavoro, coords_casa)
                             
                             if distance_andata and distance_ritorno:
                                 # Mostra i risultati
-                                col1, col2 = st.columns(2)
+                                st.subheader("Dettagli del Tragitto")
+                                st.write(f"**Casa:** {indirizzo_casa}")
+                                st.write(f"**Lavoro:** {indirizzo_lavoro}")
+                                st.write(f"**Giorno:** {giorno_selezionato}")
+                                st.write(f"**Distanza totale:** {distance_andata + distance_ritorno:.2f} km")
+                                st.write(f"**Tempo totale stimato:** {(duration_andata + duration_ritorno):.0f} minuti")
                                 
-                                with col1:
-                                    st.subheader("Dettagli del Tragitto")
-                                    st.write(f"**Casa:** {indirizzo_casa}")
-                                    st.write(f"**Lavoro:** {indirizzo_lavoro}")
-                                    st.write(f"**Giorno:** {giorno_selezionato}")
-                                    st.write(f"**Distanza totale:** {distance_andata + distance_ritorno:.2f} km")
-                                    st.write(f"**Tempo totale stimato:** {(duration_andata + duration_ritorno):.0f} minuti")
-                                    
-                                    st.write("---")
-                                    st.write("**Dettagli Andata:**")
-                                    st.write(f"Distanza: {distance_andata:.2f} km")
-                                    st.write(f"Tempo stimato: {duration_andata:.0f} minuti")
-                                    
-                                    st.write("**Dettagli Ritorno:**")
-                                    st.write(f"Distanza: {distance_ritorno:.2f} km")
-                                    st.write(f"Tempo stimato: {duration_ritorno:.0f} minuti")
+                                st.write("---")
+                                st.write("**Dettagli Andata:**")
+                                st.write(f"Distanza: {distance_andata:.2f} km")
+                                st.write(f"Tempo stimato: {duration_andata:.0f} minuti")
                                 
-                                with col2:
-                                    # Creazione mappa
-                                    m = folium.Map(location=coords_casa, zoom_start=12)
-                                    
-                                    # Marker per casa e lavoro
-                                    folium.Marker(
-                                        location=coords_casa,
-                                        popup="Casa",
-                                        icon=folium.Icon(color="green", icon="home")
-                                    ).add_to(m)
-                                    
-                                    folium.Marker(
-                                        location=coords_lavoro,
-                                        popup="Lavoro",
-                                        icon=folium.Icon(color="red", icon="briefcase")
-                                    ).add_to(m)
-                                    
-                                    # Aggiungi il percorso di andata
-                                    folium.GeoJson(
-                                        geometry_andata,
-                                        name="Andata",
-                                        style_function=lambda x: {
-                                            "color": "blue",
-                                            "weight": 4,
-                                            "opacity": 0.8
-                                        }
-                                    ).add_to(m)
-                                    
-                                    # Aggiungi il percorso di ritorno
-                                    folium.GeoJson(
-                                        geometry_ritorno,
-                                        name="Ritorno",
-                                        style_function=lambda x: {
-                                            "color": "red",
-                                            "weight": 4,
-                                            "opacity": 0.8
-                                        }
-                                    ).add_to(m)
-                                    
-                                    # Aggiungi controllo layer
-                                    folium.LayerControl().add_to(m)
-                                    
-                                    # Mostra la mappa
-                                    folium_static(m)
+                                st.write("**Dettagli Ritorno:**")
+                                st.write(f"Distanza: {distance_ritorno:.2f} km")
+                                st.write(f"Tempo stimato: {duration_ritorno:.0f} minuti")
+                                
+                                # Visualizzazione delle coordinate
+                                st.subheader("Coordinate")
+                                st.write(f"**Casa:** Latitudine {coords_casa[0]}, Longitudine {coords_casa[1]}")
+                                st.write(f"**Lavoro:** Latitudine {coords_lavoro[0]}, Longitudine {coords_lavoro[1]}")
+                                
+                                # Link a Google Maps
+                                st.subheader("Visualizza su Google Maps")
+                                google_maps_url = f"https://www.google.com/maps/dir/?api=1&origin={coords_casa[0]},{coords_casa[1]}&destination={coords_lavoro[0]},{coords_lavoro[1]}&travelmode=driving"
+                                st.markdown(f"[Apri percorso Casa → Lavoro in Google Maps]({google_maps_url})")
+                                
+                                google_maps_return_url = f"https://www.google.com/maps/dir/?api=1&origin={coords_lavoro[0]},{coords_lavoro[1]}&destination={coords_casa[0]},{coords_casa[1]}&travelmode=driving"
+                                st.markdown(f"[Apri percorso Lavoro → Casa in Google Maps]({google_maps_return_url})")
                             else:
                                 st.error("Non è stato possibile calcolare il percorso.")
                         else:
