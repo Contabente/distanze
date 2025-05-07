@@ -3,11 +3,12 @@ import pandas as pd
 import requests
 import numpy as np
 from datetime import datetime
+import itertools
 import os
 
-st.set_page_config(page_title="Calcolatore Tragitto", layout="wide")
+st.set_page_config(page_title="Calcolatore Tragitto Multi-Tappa", layout="wide")
 
-st.title("Calcolatore del Tragitto Minimo Casa-Lavoro")
+st.title("Calcolatore del Tragitto Minimo tra Casa e Lavori")
 
 # Funzione per caricare il file CSV
 def load_csv(uploaded_file):
@@ -79,6 +80,59 @@ def get_route(start_coords, end_coords):
         st.error(f"Errore durante il calcolo del percorso: {e}")
         return None, None
 
+# Funzione per calcolare la matrice delle distanze tra tutti i punti
+def calculate_distance_matrix(coords_list):
+    n = len(coords_list)
+    distances = np.zeros((n, n))
+    durations = np.zeros((n, n))
+    
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                dist, dur = get_route(coords_list[i], coords_list[j])
+                if dist is not None and dur is not None:
+                    distances[i, j] = dist
+                    durations[i, j] = dur
+                else:
+                    st.error(f"Impossibile calcolare la distanza tra i punti {i} e {j}")
+                    return None, None
+    
+    return distances, durations
+
+# Funzione per trovare il percorso ottimale (algoritmo greedy)
+def find_optimal_route(distances, start_index):
+    n = distances.shape[0]
+    current = start_index
+    path = [current]
+    remaining = set(range(n))
+    remaining.remove(current)
+    
+    # Se abbiamo solo casa e un lavoro
+    if n <= 2:
+        return list(range(n))
+    
+    # Percorso con casa -> lavori -> casa
+    while remaining:
+        if len(remaining) == 1 and 0 in remaining:
+            # Se è rimasto solo casa (0), aggiungiamolo
+            next_stop = 0
+        else:
+            # Trova il prossimo posto più vicino (non casa se ci sono ancora altri posti)
+            next_stop = min(
+                [i for i in remaining if (i != 0 or len(remaining) == 1)],
+                key=lambda x: distances[current, x]
+            )
+        
+        path.append(next_stop)
+        remaining.remove(next_stop)
+        current = next_stop
+    
+    # Se non torniamo a casa alla fine, aggiungiamo casa
+    if path[-1] != 0:
+        path.append(0)
+    
+    return path
+
 # Sezione per il caricamento del file
 uploaded_file = st.file_uploader("Carica il tuo file CSV", type=["csv"])
 
@@ -116,59 +170,151 @@ if uploaded_file:
             if giorni_disponibili:
                 giorno_selezionato = st.selectbox("Seleziona un giorno", giorni_disponibili)
                 
-                if st.button("Calcola Tragitto"):
+                if st.button("Calcola Tragitto Ottimale"):
                     # Filtra per il giorno selezionato
                     filtered_df = df[df["GIORNO"] == giorno_selezionato]
                     
                     if not filtered_df.empty:
-                        indirizzo_casa = filtered_df["CASA"].iloc[0]
-                        indirizzo_lavoro = filtered_df["LAVORO"].iloc[0]
+                        # Ottieni tutti gli indirizzi unici per quel giorno
+                        casa_address = filtered_df["CASA"].iloc[0]  # Prendiamo il primo indirizzo casa come punto di partenza
+                        lavoro_addresses = filtered_df["LAVORO"].unique().tolist()
                         
-                        # Geocodifica gli indirizzi
+                        st.write(f"**Giorno selezionato:** {giorno_selezionato}")
+                        st.write(f"**Indirizzo casa:** {casa_address}")
+                        st.write(f"**Indirizzi lavoro ({len(lavoro_addresses)}):**")
+                        for i, addr in enumerate(lavoro_addresses, 1):
+                            st.write(f"{i}. {addr}")
+                        
+                        # Geocodifica tutti gli indirizzi
                         with st.spinner("Geocodifica degli indirizzi in corso..."):
-                            coords_casa = geocode_address(indirizzo_casa)
-                            coords_lavoro = geocode_address(indirizzo_lavoro)
-                        
-                        if coords_casa and coords_lavoro:
-                            # Calcola il percorso (andata e ritorno)
-                            with st.spinner("Calcolo del percorso in corso..."):
-                                distance_andata, duration_andata = get_route(coords_casa, coords_lavoro)
-                                distance_ritorno, duration_ritorno = get_route(coords_lavoro, coords_casa)
+                            coords_casa = geocode_address(casa_address)
                             
-                            if distance_andata and distance_ritorno:
-                                # Mostra i risultati
-                                st.subheader("Dettagli del Tragitto")
-                                st.write(f"**Casa:** {indirizzo_casa}")
-                                st.write(f"**Lavoro:** {indirizzo_lavoro}")
-                                st.write(f"**Giorno:** {giorno_selezionato}")
-                                st.write(f"**Distanza totale:** {distance_andata + distance_ritorno:.2f} km")
-                                st.write(f"**Tempo totale stimato:** {(duration_andata + duration_ritorno):.0f} minuti")
-                                
-                                st.write("---")
-                                st.write("**Dettagli Andata:**")
-                                st.write(f"Distanza: {distance_andata:.2f} km")
-                                st.write(f"Tempo stimato: {duration_andata:.0f} minuti")
-                                
-                                st.write("**Dettagli Ritorno:**")
-                                st.write(f"Distanza: {distance_ritorno:.2f} km")
-                                st.write(f"Tempo stimato: {duration_ritorno:.0f} minuti")
-                                
-                                # Visualizzazione delle coordinate
-                                st.subheader("Coordinate")
-                                st.write(f"**Casa:** Latitudine {coords_casa[0]}, Longitudine {coords_casa[1]}")
-                                st.write(f"**Lavoro:** Latitudine {coords_lavoro[0]}, Longitudine {coords_lavoro[1]}")
-                                
-                                # Link a Google Maps
-                                st.subheader("Visualizza su Google Maps")
-                                google_maps_url = f"https://www.google.com/maps/dir/?api=1&origin={coords_casa[0]},{coords_casa[1]}&destination={coords_lavoro[0]},{coords_lavoro[1]}&travelmode=driving"
-                                st.markdown(f"[Apri percorso Casa → Lavoro in Google Maps]({google_maps_url})")
-                                
-                                google_maps_return_url = f"https://www.google.com/maps/dir/?api=1&origin={coords_lavoro[0]},{coords_lavoro[1]}&destination={coords_casa[0]},{coords_casa[1]}&travelmode=driving"
-                                st.markdown(f"[Apri percorso Lavoro → Casa in Google Maps]({google_maps_return_url})")
-                            else:
-                                st.error("Non è stato possibile calcolare il percorso.")
+                            if coords_casa is None:
+                                st.error(f"Impossibile geocodificare l'indirizzo di casa: {casa_address}")
+                                st.stop()
+                            
+                            coords_lavoro_list = []
+                            for addr in lavoro_addresses:
+                                coords = geocode_address(addr)
+                                if coords is None:
+                                    st.error(f"Impossibile geocodificare l'indirizzo di lavoro: {addr}")
+                                    st.stop()
+                                coords_lavoro_list.append(coords)
+                        
+                        # Crea lista completa di coordinate con casa come prima posizione
+                        all_coords = [coords_casa] + coords_lavoro_list
+                        all_addresses = [casa_address] + lavoro_addresses
+                        
+                        # Calcola la matrice delle distanze
+                        with st.spinner("Calcolo delle distanze tra tutti i punti..."):
+                            distances, durations = calculate_distance_matrix(all_coords)
+                            
+                            if distances is None or durations is None:
+                                st.error("Impossibile calcolare la matrice delle distanze.")
+                                st.stop()
+                        
+                        # Trova il percorso ottimale
+                        with st.spinner("Calcolo del percorso ottimale..."):
+                            # Casa è sempre indice 0
+                            optimal_route = find_optimal_route(distances, 0)
+                            
+                            # Calcola la distanza totale e la durata
+                            total_distance = 0
+                            total_duration = 0
+                            
+                            for i in range(len(optimal_route) - 1):
+                                from_idx = optimal_route[i]
+                                to_idx = optimal_route[i + 1]
+                                total_distance += distances[from_idx, to_idx]
+                                total_duration += durations[from_idx, to_idx]
+                        
+                        # Mostra i risultati
+                        st.subheader("Percorso Ottimale")
+                        
+                        # Tabella del percorso
+                        route_data = []
+                        for i in range(len(optimal_route)):
+                            idx = optimal_route[i]
+                            address = all_addresses[idx]
+                            address_type = "Casa" if idx == 0 else "Lavoro"
+                            
+                            # Calcola distanza dal punto precedente (tranne per il primo punto)
+                            distance_from_prev = None
+                            if i > 0:
+                                prev_idx = optimal_route[i-1]
+                                distance_from_prev = distances[prev_idx, idx]
+                            
+                            route_data.append({
+                                "Tappa": i + 1,
+                                "Tipo": address_type,
+                                "Indirizzo": address,
+                                "Distanza dalla tappa precedente (km)": f"{distance_from_prev:.2f}" if distance_from_prev is not None else "-"
+                            })
+                        
+                        route_df = pd.DataFrame(route_data)
+                        st.table(route_df)
+                        
+                        # Riepilogo totali
+                        st.subheader("Riepilogo")
+                        st.write(f"**Distanza totale:** {total_distance:.2f} km")
+                        st.write(f"**Tempo totale stimato:** {total_duration:.0f} minuti")
+                        
+                        # Creazione di link per visualizzare l'intero percorso su Google Maps
+                        st.subheader("Visualizza su Google Maps")
+                        
+                        waypoints = []
+                        for i in range(1, len(optimal_route) - 1):  # Escludi il primo e l'ultimo (Casa -> Lavori -> Casa)
+                            idx = optimal_route[i]
+                            waypoints.append(f"{all_coords[idx][0]},{all_coords[idx][1]}")
+                        
+                        # Link a Google Maps con waypoints
+                        if waypoints:
+                            start_coords = all_coords[optimal_route[0]]
+                            end_coords = all_coords[optimal_route[-1]]
+                            waypoints_str = "|".join(waypoints)
+                            
+                            google_maps_url = (
+                                f"https://www.google.com/maps/dir/?api=1"
+                                f"&origin={start_coords[0]},{start_coords[1]}"
+                                f"&destination={end_coords[0]},{end_coords[1]}"
+                                f"&waypoints={waypoints_str}"
+                                f"&travelmode=driving"
+                            )
+                            
+                            st.markdown(f"[Apri intero percorso in Google Maps]({google_maps_url})")
                         else:
-                            st.error("Non è stato possibile trovare le coordinate degli indirizzi.")
+                            # Se c'è solo un punto lavoro
+                            google_maps_url = (
+                                f"https://www.google.com/maps/dir/?api=1"
+                                f"&origin={all_coords[optimal_route[0]][0]},{all_coords[optimal_route[0]][1]}"
+                                f"&destination={all_coords[optimal_route[-1]][0]},{all_coords[optimal_route[-1]][1]}"
+                                f"&travelmode=driving"
+                            )
+                            
+                            st.markdown(f"[Apri percorso in Google Maps]({google_maps_url})")
+                        
+                        # Link singoli per ogni segmento del percorso
+                        with st.expander("Link ai segmenti del percorso"):
+                            for i in range(len(optimal_route) - 1):
+                                from_idx = optimal_route[i]
+                                to_idx = optimal_route[i + 1]
+                                
+                                from_coords = all_coords[from_idx]
+                                to_coords = all_coords[to_idx]
+                                
+                                from_address = all_addresses[from_idx]
+                                to_address = all_addresses[to_idx]
+                                
+                                segment_url = (
+                                    f"https://www.google.com/maps/dir/?api=1"
+                                    f"&origin={from_coords[0]},{from_coords[1]}"
+                                    f"&destination={to_coords[0]},{to_coords[1]}"
+                                    f"&travelmode=driving"
+                                )
+                                
+                                st.markdown(f"[{from_address} → {to_address}]({segment_url})")
+                    else:
+                        st.warning(f"Nessun dato trovato per il giorno {giorno_selezionato}.")
             else:
                 st.warning("Nessun giorno trovato nel file CSV.")
 else:
@@ -214,7 +360,7 @@ with st.expander("Come usare questa applicazione"):
     
     1. **Carica il tuo file CSV** con le colonne CASA, LAVORO e GIORNO.
     2. **Seleziona un giorno** dalla lista dei giorni disponibili.
-    3. **Premi 'Calcola Tragitto'** per vedere il percorso minimo tra casa e lavoro.
+    3. **Premi 'Calcola Tragitto Ottimale'** per vedere il percorso ottimale che inizia da casa, passa per tutti i luoghi di lavoro e torna a casa.
     
     ### Formato del file CSV
     
@@ -227,11 +373,14 @@ with st.expander("Come usare questa applicazione"):
     ```
     CASA;LAVORO;GIORNO
     Via Roma 1, Milano;Via Dante 15, Milano;01/05/2025
+    Via Roma 1, Milano;Via Montenapoleone 8, Milano;01/05/2025
+    Via Roma 1, Milano;Piazza Duomo 1, Milano;01/05/2025
     ```
     
     ### Note
+    - L'applicazione calcola il percorso ottimale partendo da casa, passando per tutti i luoghi di lavoro e tornando a casa.
+    - Per ogni giorno, puoi avere più luoghi di lavoro da visitare.
     - L'applicazione utilizza API gratuite (OpenStreetMap e OSRM) per la geocodifica e il calcolo del percorso.
-    - I risultati mostrano sia il tragitto di andata che quello di ritorno, iniziando e finendo sempre dall'indirizzo 'CASA'.
     """)
 
 # Footer con informazioni
